@@ -6,7 +6,7 @@ from src.database.db_manager import init_db
 from src.utils.states import (
     set_state, get_state, get_state_data, clear_state, append_to_state_list , back_state
 )
-from src.database.models import Order
+from src.database.models import Order , User
 
 # ایمپورت تمام هندلرها
 from src.handlers import (
