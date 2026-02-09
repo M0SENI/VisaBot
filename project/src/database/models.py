@@ -93,6 +93,12 @@ class User(Base):
     first_name = Column(String)
     last_name = Column(String)
     phone = Column(String)
+    full_name = Column(String)  # جدید
+    address = Column(Text)  # جدید
+    mobile = Column(String(20))  # جدید
+    passport_file_id = Column(String)  # جدید
+    verification_video_id = Column(String)  # جدید
+    # signature_photo_id = Column(String)  # بعداً اضافه می‌شه
     is_vip = Column(Boolean, default=False)
     referral_code = Column(String, unique=True)
     referred_by = Column(Integer, ForeignKey('users.id'))
@@ -118,7 +124,7 @@ class Order(Base):
     product_name = Column(String)
     product_price = Column(Float)
     full_name = Column(String)
-    address = Column(String)
+    address = Column(Text)
     mobile = Column(String)
     passport_file_id = Column(String)
     verification_video_id = Column(String)

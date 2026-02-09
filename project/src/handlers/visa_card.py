@@ -27,16 +27,8 @@ def start_order_name(bot: TeleBot, call: CallbackQuery, product_id: int):
             bot.answer_callback_query(call.id, "Product not found!", show_alert=True)
             return
 
-        # ذخیره product_id در state
-        set_state(call.from_user.id, 'order_full_name', {
-            'product_id': product_id,
-            'product_name': product.name,
-            'product_price': product.price
-        })
-
         text = (
-            f"You are ordering: {product.name}\n"
-            f"Price: {product.price:,} IRR\n\n"
+            f"For ordering '{product.name}' at {product.price:,.0f} IRR,\n"
             "Please enter your full name in English:"
         )
         markup = InlineKeyboardMarkup().add(
@@ -53,14 +45,17 @@ def start_order_name(bot: TeleBot, call: CallbackQuery, product_id: int):
         session.close()
 
 def visa_callback_handler(bot: TeleBot, call: CallbackQuery, action: str):
-    print(f"[VISA CALLBACK] Action received: {action}")  # دیباگ اصلی
-
+    print(f"[VISA CALLBACK] Action received: {action}")
+    
     data_parts = action.split(':')
     if not data_parts:
         bot.answer_callback_query(call.id, "Invalid action", show_alert=True)
         return
 
     cmd = data_parts[0]
+
+    # همیشه answer بده تا loading بره
+    bot.answer_callback_query(call.id, "Processing...")
 
     if cmd == 'menu':
         bot.edit_message_text(
@@ -71,55 +66,53 @@ def visa_callback_handler(bot: TeleBot, call: CallbackQuery, action: str):
         )
 
     elif cmd == 'order':
-        if len(data_parts) > 1 and data_parts[1] == 'continue':
-            # ادامه ثبت سفارش
-            try:
-                product_id = int(data_parts[2])
-                start_order_name(bot, call, product_id)  # یا هر تابعی که برای ادامه داری
-            except (IndexError, ValueError):
-                bot.answer_callback_query(call.id, "Invalid product ID", show_alert=True)
-        else:
-            # شروع لیست محصولات
-            show_products_list(bot, call)
+        show_products_list(bot, call)
 
     elif cmd == 'products':
         try:
             page = int(data_parts[1]) if len(data_parts) > 1 else 1
             print(f"[PRODUCTS] Loading page {page}")
             show_products_list(bot, call, page)
-        except (IndexError, ValueError):
-            print("[PRODUCTS] Invalid page number")
-            bot.answer_callback_query(call.id, "Invalid page number", show_alert=True)
+        except Exception as e:
+            print(f"[PRODUCTS ERROR] {str(e)}")
+            bot.answer_callback_query(call.id, "Invalid page", show_alert=True)
 
     elif cmd == 'product':
         try:
             product_id = int(data_parts[1])
+            print(f"[PRODUCT] Showing detail for ID {product_id}")
             show_product_detail(bot, call, product_id)
-        except (IndexError, ValueError):
+        except Exception as e:
+            print(f"[PRODUCT ERROR] {str(e)}")
             bot.answer_callback_query(call.id, "Invalid product ID", show_alert=True)
-
-    elif cmd == 'guide':
-        try:
-            product_id = int(data_parts[1])
-            show_product_guide(bot, call, product_id)
-        except (IndexError, ValueError):
-            bot.answer_callback_query(call.id, "Invalid guide request", show_alert=True)
 
     elif cmd == 'order_product':
         try:
             product_id = int(data_parts[1])
+            print(f"[ORDER PRODUCT] Starting flow for product {product_id}")
             start_order_flow(bot, call, product_id)
-        except (IndexError, ValueError):
-            bot.answer_callback_query(call.id, "Invalid order request", show_alert=True)
+        except Exception as e:
+            print(f"[ORDER PRODUCT ERROR] {str(e)}")
+            bot.answer_callback_query(call.id, "Error starting order", show_alert=True)
+
+    elif cmd == 'order_continue':
+        try:
+            product_id = int(data_parts[1])
+            print(f"[ORDER CONTINUE] Starting name step for product {product_id}")
+            start_order_name(bot, call, product_id)
+            bot.answer_callback_query(call.id, "Processing...")  # حذف loading
+        except Exception as e:
+            print(f"[ORDER CONTINUE ERROR] {str(e)}")
+            bot.answer_callback_query(call.id, "Error", show_alert=True)
 
     elif cmd == 'verification_guide':
-        bot.answer_callback_query(call.id, "Guide coming soon.", show_alert=True)
-
-    elif cmd in ['charge', 'documents']:
-        bot.answer_callback_query(call.id, "This section is not implemented yet.", show_alert=True)
+        bot.send_message(
+            call.message.chat.id,
+            "Verification guide is not set yet. Please contact support."
+        )
 
     else:
-        print(f"[VISA UNKNOWN] Unknown cmd: {cmd} (full action: {action})")
+        print(f"[VISA UNKNOWN] Unknown cmd: {cmd}")
         bot.answer_callback_query(call.id, "Invalid command", show_alert=True)
         
         
@@ -177,15 +170,22 @@ def show_product_detail(bot: TeleBot, call: CallbackQuery, product_id: int):
             bot.answer_callback_query(call.id, "Product not found!", show_alert=True)
             return
 
-        text = f"Product: {product.name}\nCode: {product.code}\nPrice: {product.price:,} IRR\nDescription: {product.description_text or 'None'}"
+        text = (
+            f"Product ID: {product.id}\n"
+            f"Code: {product.code}\n"
+            f"Name: {product.name}\n"
+            f"Price: {product.price:,.0f} IRR\n\n"
+            f"Description:\n{product.description_text or 'None'}"
+        )
 
         markup = product_detail_keyboard(product.id)
 
-        # پیام قبلی رو حذف کن (برای جلوگیری از ارور edit روی عکس)
+        # پیام قبلی رو حذف کن
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
+            print("[DETAIL] Previous message deleted")
         except:
-            pass  # اگر حذف نشد مهم نیست
+            print("[DETAIL] Delete failed - sending new anyway")
 
         # پیام جدید بفرست
         if product.photo_file_id:
@@ -203,9 +203,9 @@ def show_product_detail(bot: TeleBot, call: CallbackQuery, product_id: int):
                 parse_mode='Markdown',
                 reply_markup=markup
             )
-
     finally:
         session.close()
+        
 
 def show_product_guide(bot: TeleBot, call: CallbackQuery, product_id: int):
     """Placeholder for guide (will be editable from admin later)"""
@@ -234,24 +234,32 @@ def start_order_flow(bot: TeleBot, call: CallbackQuery, product_id: int):
             bot.answer_callback_query(call.id, "Product not found!", show_alert=True)
             return
 
-        # ذخیره موقت product_id در state
-        set_state(call.from_user.id, 'order_confirm_docs', {'product_id': product_id, 'product_name': product.name, 'product_price': product.price})
+        set_state(call.from_user.id, 'order_confirm_docs', {
+            'product_id': product_id,
+            'product_name': product.name,
+            'product_price': product.price
+        })
 
         text = (
             "You are about to start the order registration process.\n"
             f"Do you have the required documents?\n"
-            f"It is recommended to review the required documents for the product '{product.name}' using the back button."
+            f"It is recommended to review the required documents for '{product.name}'."
         )
         markup = InlineKeyboardMarkup(row_width=2)
         markup.add(
-            InlineKeyboardButton("Continue", callback_data=f"order:continue:{product_id}"),
+            InlineKeyboardButton("Continue", callback_data=f"visa:order_continue:{product_id}"),
             InlineKeyboardButton("Back", callback_data=f"visa:product:{product_id}")
         )
 
-        bot.edit_message_text(
-            text,
+        # پیام قبلی رو حذف کن
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except:
+            pass
+
+        bot.send_message(
             call.message.chat.id,
-            call.message.message_id,
+            text,
             reply_markup=markup
         )
     finally:

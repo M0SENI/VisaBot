@@ -73,8 +73,8 @@ def products_list_keyboard(products, page=1, per_page=5):
 def product_detail_keyboard(product_id):
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
-        InlineKeyboardButton("Order Product", callback_data=f"visa:order_product:{product_id}"),
+        InlineKeyboardButton("Order Product", callback_data=f"visa:order_product:{product_id}"),  # ← این دکمه اصلی است
         InlineKeyboardButton("Guide", callback_data=f"visa:guide:{product_id}")
     )
-    markup.add(InlineKeyboardButton("Back to List", callback_data="visa:products:1"))  # صفحه 1
+    markup.add(InlineKeyboardButton("Back to List", callback_data="visa:products:1"))
     return markup
