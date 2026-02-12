@@ -11,6 +11,7 @@ Base.metadata.create_all(engine)
 
 def init_db():
     Base.metadata.create_all(engine)
+    
 
 def get_user(user_id: int) -> User:
     session = Session()

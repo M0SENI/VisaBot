@@ -3,8 +3,7 @@ from telebot import TeleBot
 from telebot.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from src.database.db_manager import Session
 from src.database.models import Product, ProductContent
-from src.utils.keyboards import visa_menu_keyboard, products_list_keyboard, product_detail_keyboard
-import telebot
+from src.utils.keyboards import visa_menu_keyboard, products_list_keyboard, product_detail_keyboard , get_main_menu_markup
 from src.utils.states import set_state, get_state, get_state_data, clear_state
 from config.settings import ADMIN_ID, WALLET_ADDRESS
 
@@ -18,44 +17,15 @@ def visa_card_handler(bot: TeleBot, call: CallbackQuery):
         reply_markup=visa_menu_keyboard()
     )
 
-
-def start_order_name(bot: TeleBot, call: CallbackQuery, product_id: int):
-    session = Session()
-    try:
-        product = session.query(Product).filter_by(id=product_id).first()
-        if not product:
-            bot.answer_callback_query(call.id, "Product not found!", show_alert=True)
-            return
-
-        text = (
-            f"For ordering '{product.name}' at {product.price:,.0f} IRR,\n"
-            "Please enter your full name in English:"
-        )
-        markup = InlineKeyboardMarkup().add(
-            InlineKeyboardButton("Cancel", callback_data="order:cancel")
-        )
-
-        bot.edit_message_text(
-            text,
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
-    finally:
-        session.close()
-
 def visa_callback_handler(bot: TeleBot, call: CallbackQuery, action: str):
     print(f"[VISA CALLBACK] Action received: {action}")
-    
+    bot.answer_callback_query(call.id, "Processing...")
+
     data_parts = action.split(':')
     if not data_parts:
-        bot.answer_callback_query(call.id, "Invalid action", show_alert=True)
         return
 
     cmd = data_parts[0]
-
-    # همیشه answer بده تا loading بره
-    bot.answer_callback_query(call.id, "Processing...")
 
     if cmd == 'menu':
         bot.edit_message_text(
@@ -69,41 +39,24 @@ def visa_callback_handler(bot: TeleBot, call: CallbackQuery, action: str):
         show_products_list(bot, call)
 
     elif cmd == 'products':
-        try:
-            page = int(data_parts[1]) if len(data_parts) > 1 else 1
-            print(f"[PRODUCTS] Loading page {page}")
-            show_products_list(bot, call, page)
-        except Exception as e:
-            print(f"[PRODUCTS ERROR] {str(e)}")
-            bot.answer_callback_query(call.id, "Invalid page", show_alert=True)
+        page = int(data_parts[1]) if len(data_parts) > 1 else 1
+        show_products_list(bot, call, page)
 
     elif cmd == 'product':
-        try:
-            product_id = int(data_parts[1])
-            print(f"[PRODUCT] Showing detail for ID {product_id}")
-            show_product_detail(bot, call, product_id)
-        except Exception as e:
-            print(f"[PRODUCT ERROR] {str(e)}")
-            bot.answer_callback_query(call.id, "Invalid product ID", show_alert=True)
+        product_id = int(data_parts[1])
+        show_product_detail(bot, call, product_id)
+
+    elif cmd == 'guide':
+        product_id = int(data_parts[1])
+        show_product_guide(bot, call, product_id)
 
     elif cmd == 'order_product':
-        try:
-            product_id = int(data_parts[1])
-            print(f"[ORDER PRODUCT] Starting flow for product {product_id}")
-            start_order_flow(bot, call, product_id)
-        except Exception as e:
-            print(f"[ORDER PRODUCT ERROR] {str(e)}")
-            bot.answer_callback_query(call.id, "Error starting order", show_alert=True)
+        product_id = int(data_parts[1])
+        start_order_flow(bot, call, product_id)
 
     elif cmd == 'order_continue':
-        try:
-            product_id = int(data_parts[1])
-            print(f"[ORDER CONTINUE] Starting name step for product {product_id}")
-            start_order_name(bot, call, product_id)
-            bot.answer_callback_query(call.id, "Processing...")  # حذف loading
-        except Exception as e:
-            print(f"[ORDER CONTINUE ERROR] {str(e)}")
-            bot.answer_callback_query(call.id, "Error", show_alert=True)
+        product_id = int(data_parts[1])
+        start_order_name(bot, call, product_id)
 
     elif cmd == 'verification_guide':
         bot.send_message(
@@ -111,59 +64,42 @@ def visa_callback_handler(bot: TeleBot, call: CallbackQuery, action: str):
             "Verification guide is not set yet. Please contact support."
         )
 
+    elif cmd == 'cancel':
+        clear_state(call.from_user.id)
+        bot.edit_message_text(
+            "Operation cancelled.",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=get_main_menu_markup(call.from_user.id)
+        )
+
     else:
-        print(f"[VISA UNKNOWN] Unknown cmd: {cmd}")
-        bot.answer_callback_query(call.id, "Invalid command", show_alert=True)
-        
-        
+        bot.send_message(call.message.chat.id, "Invalid command.")
 
 def show_products_list(bot: TeleBot, call: CallbackQuery, page: int = 1):
-    print(f"[SHOW LIST] Page {page} requested by user {call.from_user.id}")
-    
     session = Session()
     try:
         products = session.query(Product).order_by(Product.id.desc()).all()
-        print(f"[SHOW LIST] Found {len(products)} products")
-
         if not products:
-            text = "No products available at the moment.\nPlease check back later."
+            text = "No products available at the moment.\nComing soon."
             markup = InlineKeyboardMarkup().add(
-                InlineKeyboardButton("Back to Visa Menu", callback_data="visa:menu")
+                InlineKeyboardButton("Back", callback_data="visa:menu")
             )
         else:
-            text = f"Available Products (Page {page}):"
+            text = "Select a product to order:"
             markup = products_list_keyboard(products, page)
 
-        # Delete the previous message (photo or text) to avoid edit error
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-            print("[SHOW LIST] Deleted previous message")
-        except Exception as del_e:
-            print(f"[SHOW LIST DELETE ERROR] {str(del_e)}")  # Continue even if delete fails
-
-        # Send new text message
-        bot.send_message(
-            call.message.chat.id,
+        bot.edit_message_text(
             text,
-            reply_markup=markup
-        )
-        print("[SHOW LIST] New message sent")
-    except Exception as e:
-        print(f"[SHOW LIST ERROR] {str(e)}")
-        bot.send_message(
             call.message.chat.id,
-            "Error loading products. Please try again or contact support.",
-            reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("Back to Visa Menu", callback_data="visa:menu")
-            )
+            call.message.message_id,
+            reply_markup=markup
         )
     finally:
         session.close()
-        
-        
 
 def show_product_detail(bot: TeleBot, call: CallbackQuery, product_id: int):
-    session = Session()
+    session = Session
     try:
         product = session.query(Product).filter_by(id=product_id).first()
         if not product:
@@ -174,41 +110,22 @@ def show_product_detail(bot: TeleBot, call: CallbackQuery, product_id: int):
             f"Product ID: {product.id}\n"
             f"Code: {product.code}\n"
             f"Name: {product.name}\n"
-            f"Price: {product.price:,.0f} IRR\n\n"
+            f"Price: {product.price:,} IRR\n\n"
             f"Description:\n{product.description_text or 'None'}"
         )
 
-        markup = product_detail_keyboard(product.id)
+        markup = product_detail_keyboard(product_id)
 
-        # پیام قبلی رو حذف کن
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-            print("[DETAIL] Previous message deleted")
-        except:
-            print("[DETAIL] Delete failed - sending new anyway")
-
-        # پیام جدید بفرست
-        if product.photo_file_id:
-            bot.send_photo(
-                call.message.chat.id,
-                product.photo_file_id,
-                caption=text,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
-        else:
-            bot.send_message(
-                call.message.chat.id,
-                text,
-                parse_mode='Markdown',
-                reply_markup=markup
-            )
+        bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
     finally:
         session.close()
-        
 
 def show_product_guide(bot: TeleBot, call: CallbackQuery, product_id: int):
-    """Placeholder for guide (will be editable from admin later)"""
     text = (
         "Product Guide:\n"
         "• Step 1 ...\n"
@@ -225,7 +142,6 @@ def show_product_guide(bot: TeleBot, call: CallbackQuery, product_id: int):
         reply_markup=markup
     )
 
-
 def start_order_flow(bot: TeleBot, call: CallbackQuery, product_id: int):
     session = Session()
     try:
@@ -234,24 +150,21 @@ def start_order_flow(bot: TeleBot, call: CallbackQuery, product_id: int):
             bot.answer_callback_query(call.id, "Product not found!", show_alert=True)
             return
 
-        set_state(call.from_user.id, 'order_confirm_docs', {
+        set_state(call.from_user.id, 'order_full_name', {
             'product_id': product_id,
             'product_name': product.name,
             'product_price': product.price
         })
 
         text = (
-            "You are about to start the order registration process.\n"
-            f"Do you have the required documents?\n"
-            f"It is recommended to review the required documents for '{product.name}'."
+            f"For ordering '{product.name}' at {product.price:,.0f} IRR,\n"
+            "Please enter your full name in English:"
         )
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            InlineKeyboardButton("Continue", callback_data=f"visa:order_continue:{product_id}"),
-            InlineKeyboardButton("Back", callback_data=f"visa:product:{product_id}")
+        markup = InlineKeyboardMarkup().add(
+            InlineKeyboardButton("Cancel", callback_data="order:cancel")
         )
 
-        # پیام قبلی رو حذف کن
+        # پیام قبلی رو حذف کن (عکس جزئیات محصول)
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except:

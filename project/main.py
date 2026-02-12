@@ -1,12 +1,15 @@
 # main.py
 import telebot
 from telebot.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from config.settings import BOT_TOKEN, ADMIN_ID , WALLET_ADDRESS
-from src.database.db_manager import init_db
+from config.settings import BOT_TOKEN, ADMIN_ID, WALLET_ADDRESS
+from src.database.db_manager import init_db, Session
 from src.utils.states import (
-    set_state, get_state, get_state_data, clear_state, append_to_state_list , back_state
+    set_state, get_state, get_state_data, clear_state, append_to_state_list, back_state
 )
-from src.database.models import Order , User
+from src.database.models import Order, User, Product
+from src.utils.keyboards import (
+    visa_menu_keyboard, products_list_keyboard, product_detail_keyboard, get_main_menu_markup
+)
 
 # ایمپورت تمام هندلرها
 from src.handlers import (
@@ -22,19 +25,6 @@ from src.handlers import (
 
 bot = telebot.TeleBot(BOT_TOKEN)
 init_db()
-
-def get_main_menu_markup(user_id: int) -> InlineKeyboardMarkup:
-    markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        InlineKeyboardButton("Visa Card Order", callback_data="menu:visa_card"),
-        InlineKeyboardButton("Wallet",          callback_data="menu:wallet"),
-        InlineKeyboardButton("Profile",         callback_data="menu:profile"),
-        InlineKeyboardButton("Orders",          callback_data="menu:orders"),
-        InlineKeyboardButton("Support",         callback_data="menu:support"),
-    )
-    if user_id == ADMIN_ID:
-        markup.add(InlineKeyboardButton("Admin Panel", callback_data="admin:main"))
-    return markup
 
 
 # ── شروع ربات ──
@@ -52,37 +42,105 @@ def start_handler(message):
     )
     
     
-@bot.message_handler(content_types=['text', 'photo'])  # فقط عکس و متن رو بگیر (بهینه‌تر)
+
+@bot.message_handler(content_types=['text', 'photo', 'video', 'document'])
 def text_or_media_handler(message):
     user_id = message.from_user.id
     
-    # لاگ اولیه - همیشه باید چاپ بشه
     print(f"[HANDLER START] User: {user_id} | Type: {message.content_type} | Text: {message.text or '(no text)'}")
     
     state = get_state(user_id)
     print(f"[HANDLER] Current state: {state}")
     
     if not state:
-        print("[HANDLER] No state found - replying with menu message")
         bot.reply_to(message, "Please use the inline buttons.")
         return
 
     try:
+        # ── بخش ادمین: افزودن محصول ──
         if state == 'admin_add_product_photo':
-            print("[PHOTO STATE] Entering photo handler")
             if message.content_type == 'photo':
                 photo_id = message.photo[-1].file_id
                 print(f"[PHOTO SAVED] File ID: {photo_id}")
-                
-                # ذخیره state جدید
                 set_state(user_id, 'admin_add_product_name', {'photo_file_id': photo_id})
-                print("[STATE UPDATED] Changed to admin_add_product_name")
-                
-                bot.reply_to(message, "Photo received! Please send the product name:")
+                bot.reply_to(
+                    message,
+                    "Photo received! Please send the product name:",
+                    reply_markup=InlineKeyboardMarkup().add(
+                        InlineKeyboardButton("Cancel", callback_data="admin:cancel_add_product")
+                    )
+                )
             else:
-                print("[PHOTO STATE] Not a photo")
                 bot.reply_to(message, "Please send a photo or click Skip.")
-                
+
+        elif state == 'admin_add_product_name':
+            name = message.text.strip()
+            if name:
+                data = get_state_data(user_id) or {}
+                data['name'] = name
+                set_state(user_id, 'admin_add_product_price', data)
+                bot.reply_to(
+                    message,
+                    "Name saved. Please send the product price in English numbers:",
+                    reply_markup=InlineKeyboardMarkup().add(
+                        InlineKeyboardButton("Cancel", callback_data="admin:cancel_add_product")
+                    )
+                )
+            else:
+                bot.reply_to(message, "Product name cannot be empty. Try again.")
+
+        elif state == 'admin_add_product_price':
+            try:
+                price = int(message.text.strip())
+                data = get_state_data(user_id) or {}
+                data['price'] = price
+                set_state(user_id, 'admin_add_product_description', data)
+                bot.reply_to(
+                    message,
+                    "Price saved.\n\nNow send descriptions one by one. When finished, send /done:",
+                    reply_markup=InlineKeyboardMarkup().add(
+                        InlineKeyboardButton("Cancel", callback_data="admin:cancel_add_product")
+                    )
+                )
+            except ValueError:
+                bot.reply_to(message, "Price must be a number. Try again.")
+
+        elif state == 'admin_add_product_description':
+            text = message.text.strip()
+            if text == '/done':
+                data = get_state_data(user_id) or {}
+                session = Session()
+                try:
+                    product = Product(
+                        code=f"PK-{session.query(Product).count() + 1:03d}",
+                        name=data.get('name', 'Unnamed'),
+                        price=data.get('price', 0),
+                        description_text="\n".join(data.get('descriptions', [])) or None,
+                        photo_file_id=data.get('photo_file_id')
+                    )
+                    session.add(product)
+                    session.commit()
+                    bot.send_message(
+                        message.chat.id,
+                        f"Product added successfully!\n\n"
+                        f"Code: {product.code}\n"
+                        f"Name: {product.name}\n"
+                        f"Price: {product.price:,} IRR\n"
+                        f"Description:\n{product.description_text or 'None'}\n"
+                        f"Photo ID: {product.photo_file_id or 'None'}",
+                        reply_markup=get_main_menu_markup(user_id)
+                    )
+                    clear_state(user_id)
+                except Exception as e:
+                    bot.send_message(message.chat.id, f"Error saving product: {str(e)}")
+                finally:
+                    session.close()
+            else:
+                append_to_state_list(user_id, 'descriptions', text)
+                count = len(get_state_data(user_id).get('descriptions', []))
+                bot.reply_to(message, f"Description {count} saved.\nSend next or /done to finish.")
+
+        # ── بخش سفارش ویزا کارت ── (دقیقاً طبق فلو شما)
         elif state.startswith('order_'):
             data = get_state_data(user_id) or {}
             product_id = data.get('product_id')
@@ -90,7 +148,7 @@ def text_or_media_handler(message):
             product_price = data.get('product_price', 0)
 
             if not product_id:
-                bot.reply_to(message, "Order session expired or invalid. Please start again.")
+                bot.reply_to(message, "Order session expired. Please start again.")
                 clear_state(user_id)
                 return
 
@@ -99,48 +157,43 @@ def text_or_media_handler(message):
             )
 
             if state == 'order_full_name':
-                full_name = message.text.strip() if message.text else ''
+                full_name = message.text.strip()
                 if full_name:
-                    data = get_state_data(user_id) or {}
                     data['full_name'] = full_name
                     set_state(user_id, 'order_address', data)
-                    
-                    # پیام مرحله بعدی رو ارسال کن
                     bot.reply_to(
                         message,
                         "Please enter your address in English format:",
-                        reply_markup=InlineKeyboardMarkup().add(
-                            InlineKeyboardButton("Cancel", callback_data="order:cancel")
-                        )
+                        reply_markup=cancel_markup
                     )
                 else:
-                    bot.reply_to(message, "Full name cannot be empty. Try again.")
+                    bot.reply_to(message, "Full name cannot be empty. Try again.", reply_markup=cancel_markup)
 
             elif state == 'order_address':
-                address = message.text.strip() if message.text else ''
+                address = message.text.strip()
                 if address:
-                    data = get_state_data(user_id) or {}
                     data['address'] = address
                     set_state(user_id, 'order_mobile', data)
-                    
                     bot.reply_to(
                         message,
                         "Please enter your mobile number in English digits:",
-                        reply_markup=InlineKeyboardMarkup().add(
-                            InlineKeyboardButton("Cancel", callback_data="order:cancel")
-                        )
+                        reply_markup=cancel_markup
                     )
                 else:
-                    bot.reply_to(message, "Address cannot be empty. Try again.")
+                    bot.reply_to(message, "Address cannot be empty. Try again.", reply_markup=cancel_markup)
 
             elif state == 'order_mobile':
-                mobile = message.text.strip() if message.text else ''
+                mobile = message.text.strip()
                 if mobile.isdigit() and len(mobile) >= 10:
                     data['mobile'] = mobile
                     set_state(user_id, 'order_passport', data)
-                    bot.reply_to(message, "Please send your passport image:", reply_markup=cancel_markup)
+                    bot.reply_to(
+                        message,
+                        "Please send your passport image:",
+                        reply_markup=cancel_markup
+                    )
                 else:
-                    bot.reply_to(message, "Mobile number must be digits only and at least 10 characters. Try again.", reply_markup=cancel_markup)
+                    bot.reply_to(message, "Mobile number must be digits only and at least 10 characters.", reply_markup=cancel_markup)
 
             elif state == 'order_passport':
                 if message.content_type == 'photo':
@@ -152,14 +205,25 @@ def text_or_media_handler(message):
                         InlineKeyboardButton("Guide", callback_data="order:verification_guide"),
                         InlineKeyboardButton("Cancel", callback_data="order:cancel")
                     )
-                    bot.reply_to(message, "Please send the verification video:", reply_markup=guide_markup)
+                    bot.reply_to(
+                        message,
+                        "Please send the verification video:",
+                        reply_markup=guide_markup
+                    )
                 else:
                     bot.reply_to(message, "Please send a photo of your passport.", reply_markup=cancel_markup)
 
             elif state == 'order_verification_video':
+                print(f"[VERIFICATION VIDEO] Received content_type: {message.content_type}")
+                
+                file_id = None
                 if message.content_type == 'video':
-                    video_id = message.video.file_id
-                    data['verification_video_id'] = video_id
+                    file_id = message.video.file_id
+                elif message.content_type == 'document' and message.document.mime_type.startswith('video/'):
+                    file_id = message.document.file_id
+
+                if file_id:
+                    data['verification_video_id'] = file_id
                     deposit_amount = product_price * 0.2
                     text = (
                         f"All required files received.\n\n"
@@ -180,7 +244,7 @@ def text_or_media_handler(message):
 
                     session = Session()
                     try:
-                        # آپدیت User
+                        # Update User
                         user = session.query(User).filter_by(user_id=user_id).first()
                         if user:
                             user.full_name = data.get('full_name')
@@ -188,8 +252,9 @@ def text_or_media_handler(message):
                             user.mobile = data.get('mobile')
                             user.passport_file_id = data.get('passport_file_id')
                             user.verification_video_id = data.get('verification_video_id')
+                            session.commit()
 
-                        # ایجاد Order
+                        # Create Order
                         order = Order(
                             user_id=user_id,
                             product_id=product_id,
@@ -206,7 +271,7 @@ def text_or_media_handler(message):
                         session.add(order)
                         session.commit()
 
-                        # ارسال به ادمین
+                        # Send to admin
                         media = []
                         if data.get('passport_file_id'):
                             media.append(telebot.types.InputMediaPhoto(data['passport_file_id'], caption="Passport"))
@@ -230,7 +295,12 @@ def text_or_media_handler(message):
                             InlineKeyboardButton("Accept", callback_data=f"admin:accept_order:{order.id}"),
                             InlineKeyboardButton("Reject", callback_data=f"admin:reject_order:{order.id}")
                         )
-                        markup.add(InlineKeyboardButton("User Profile", callback_data=f"menu:profile:{user_id}"))
+                        markup.add(
+                            InlineKeyboardButton(
+                                "Open User Chat",
+                                url=f"tg://user?id={user_id}"
+                            )
+                        )
 
                         if media:
                             bot.send_media_group(ADMIN_ID, media)
@@ -243,149 +313,16 @@ def text_or_media_handler(message):
                         )
                         clear_state(user_id)
                     except Exception as e:
+                        print(f"[ORDER SAVE ERROR] {str(e)}")
                         bot.send_message(message.chat.id, f"Error submitting order: {str(e)}")
                     finally:
                         session.close()
                 else:
                     bot.reply_to(message, "Transaction hash cannot be empty. Try again.", reply_markup=cancel_markup)
 
-
-        elif state == 'admin_add_product_name':
-            name = message.text.strip() if message.text else ''
-            print(f"[NAME STATE] Received name: '{name}'")
-            
-            if name:
-                current_data = get_state_data(user_id) or {}
-                current_data['name'] = name
-                set_state(user_id, 'admin_add_product_price', current_data)
-                print("[STATE UPDATED] Changed to admin_add_product_price")
-                bot.reply_to(message, "Name saved. Please send the product price (English numbers only):")
-            else:
-                bot.reply_to(message, "Name cannot be empty. Try again.")
-                
-        elif state == 'order_full_name':
-            full_name = message.text.strip() if message.text else ''
-            if full_name:
-                data = get_state_data(user_id) or {}
-                data['full_name'] = full_name
-                set_state(user_id, 'order_address', data)
-                
-                # پیام مرحله بعدی رو ارسال کن
-                bot.reply_to(
-                    message,
-                    "Please enter your address in English format:",
-                    reply_markup=InlineKeyboardMarkup().add(
-                        InlineKeyboardButton("Cancel", callback_data="order:cancel")
-                    )
-                )
-            else:
-                bot.reply_to(message, "Full name cannot be empty. Try again.")
-
-        elif state == 'admin_add_product_price':
-            print("[PRICE STATE] Entering price handler")
-            try:
-                price_str = message.text.strip() if message.text else ''
-                price = int(price_str)
-                print(f"[PRICE SAVED] {price}")
-                
-                current_data = get_state_data(user_id) or {}
-                current_data['price'] = price
-                current_data['descriptions'] = []
-                set_state(user_id, 'admin_add_product_description', current_data)
-                print("[STATE UPDATED] Changed to admin_add_product_description")
-                
-                bot.reply_to(
-                    message,
-                    "Price saved.\n\nNow send descriptions one by one.\nWhen finished, send /done"
-                )
-            except ValueError:
-                print("[PRICE ERROR] Invalid number")
-                bot.reply_to(message, "Price must be a number (English digits only). Try again.")
-
-        elif state == 'admin_add_product_description':
-            text = message.text.strip() if message.text else ''
-            print(f"[DESC STATE] Received: '{text}'")
-            
-            if text == '/done':
-                print("[DESC STATE] /done received - saving product")
-                from src.database.db_manager import Session
-                from src.database.models import Product
-
-                data = get_state_data(user_id) or {}
-                session = Session()
-                try:
-                    product = Product(
-                        code=f"PK-{session.query(Product).count() + 1:03d}",
-                        name=data.get('name', 'Unnamed'),
-                        price=data.get('price', 0),
-                        description_text="\n".join(data.get('descriptions', [])) or None,
-                        photo_file_id=data.get('photo_file_id')
-                    )
-                    session.add(product)
-                    session.commit()
-                    print(f"[PRODUCT SAVED] ID: {product.id} | Code: {product.code}")
-
-                    reply_text = (
-                        f"Product added successfully!\n\n"
-                        f"Code: {product.code}\n"
-                        f"Name: {product.name}\n"
-                        f"Price: {product.price:,} IRR\n"
-                        f"Description:\n{product.description_text or 'None'}\n"
-                        f"Photo ID: {product.photo_file_id or 'None'}"
-                    )
-                    bot.send_message(
-                        message.chat.id,
-                        reply_text,
-                        reply_markup=get_main_menu_markup(user_id)
-                    )
-                    clear_state(user_id)
-                except Exception as e:
-                    print(f"[SAVE ERROR] {str(e)}")
-                    bot.send_message(message.chat.id, f"Error saving product: {str(e)}")
-                finally:
-                    session.close()
-            else:
-                append_to_state_list(user_id, 'descriptions', text)
-                count = len(get_state_data(user_id).get('descriptions', []))
-                print(f"[DESC ADDED] Total: {count}")
-                bot.reply_to(message, f"Description {count} saved.\nSend next or /done to finish.")
-
-        elif state == 'admin_edit_price':
-            print("[EDIT PRICE STATE] Entering")
-            try:
-                new_price = int(message.text.strip())
-                data = get_state_data(user_id)
-                product_id = data.get('product_id')
-                print(f"[EDIT PRICE] New price: {new_price} for product ID: {product_id}")
-                
-                session = Session()
-                try:
-                    product = session.query(Product).filter_by(id=product_id).first()
-                    if product:
-                        old_price = product.price
-                        product.price = new_price
-                        session.commit()
-                        print("[PRICE UPDATED] Success")
-                        bot.send_message(
-                            message.chat.id,
-                            f"Price updated!\n"
-                            f"Product: {product.name} (ID: {product.id})\n"
-                            f"New Price: {new_price:,} IRR (was {old_price:,})",
-                            reply_markup=get_main_menu_markup(user_id)
-                        )
-                    clear_state(user_id)
-                finally:
-                    session.close()
-            except ValueError:
-                bot.reply_to(message, "Please send a valid number (English digits).")
-            except Exception as e:
-                print(f"[EDIT PRICE ERROR] {str(e)}")
-                bot.reply_to(message, f"Error: {str(e)}")
-
     except Exception as e:
         print(f"[HANDLER CRASH] {type(e).__name__}: {str(e)}")
-        bot.reply_to(message, f"An error occurred in handler: {str(e)}")
-        
+        bot.reply_to(message, f"An error occurred: {str(e)}")
         
 # ── دیسپچر مرکزی کال‌بک‌ها ──
 @bot.callback_query_handler(func=lambda call: True)

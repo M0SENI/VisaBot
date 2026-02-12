@@ -93,12 +93,12 @@ class User(Base):
     first_name = Column(String)
     last_name = Column(String)
     phone = Column(String)
-    full_name = Column(String)  # جدید
-    address = Column(Text)  # جدید
-    mobile = Column(String(20))  # جدید
-    passport_file_id = Column(String)  # جدید
-    verification_video_id = Column(String)  # جدید
-    # signature_photo_id = Column(String)  # بعداً اضافه می‌شه
+    full_name = Column(String)  # new for order
+    address = Column(Text)  # new
+    mobile = Column(String(20))  # new
+    passport_file_id = Column(String)  # new
+    verification_video_id = Column(String)  # new
+    signature_photo_id = Column(String)  # for later
     is_vip = Column(Boolean, default=False)
     referral_code = Column(String, unique=True)
     referred_by = Column(Integer, ForeignKey('users.id'))
@@ -121,19 +121,20 @@ class Order(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id'))
     product_id = Column(Integer, ForeignKey('products.id'))
-    product_name = Column(String)
+    product_name = Column(String(100))
     product_price = Column(Float)
-    full_name = Column(String)
+    full_name = Column(String(100))
     address = Column(Text)
-    mobile = Column(String)
+    mobile = Column(String(20))
     passport_file_id = Column(String)
     verification_video_id = Column(String)
     tx_hash = Column(String)
     status = Column(String, default='pending')  # pending, suspended, done
+    description = Column(Text)  # for notes
     created_at = Column(DateTime, default=func.now())
 
-    user = relationship('User')
-    product = relationship('Product')
+    user = relationship('User', backref='orders')
+    product = relationship('Product', backref='orders')
 
 class Wallet(Base):
     __tablename__ = 'wallet'

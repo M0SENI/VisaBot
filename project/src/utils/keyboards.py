@@ -1,5 +1,6 @@
 # utils/keyboards.py
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from config.settings import ADMIN_ID
 
 def main_menu_keyboard():
     # Main menu as inline for callback-based navigation
@@ -12,6 +13,20 @@ def main_menu_keyboard():
         InlineKeyboardButton("Support", callback_data="menu:support"),
         InlineKeyboardButton("VIP", callback_data="menu:vip")
     )
+    return markup
+
+
+def get_main_menu_markup(user_id: int) -> InlineKeyboardMarkup:
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("Visa Card Order", callback_data="menu:visa_card"),
+        InlineKeyboardButton("Wallet", callback_data="menu:wallet"),
+        InlineKeyboardButton("Profile", callback_data="menu:profile"),
+        InlineKeyboardButton("Orders", callback_data="menu:orders"),
+        InlineKeyboardButton("Support", callback_data="menu:support"),
+    )
+    if user_id == ADMIN_ID:
+        markup.add(InlineKeyboardButton("Admin Panel", callback_data="admin:main"))
     return markup
 
 def wallet_menu_keyboard():
